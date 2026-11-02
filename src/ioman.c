@@ -60,28 +60,33 @@ static int isIORunning = 0;
 
 int ioRegisterHandler(int type, io_request_handler_t handler)
 {
-    WaitSema(gProcSemaId);
-
-    if (handler == NULL)
-        return IO_ERR_INVALID_HANDLER;
-
-    if (gHandlerCount >= MAX_IO_HANDLERS)
-        return IO_ERR_TOO_MANY_HANDLERS;
-
+    int result = IO_OK;
     int i;
 
-    for (i = 0; i < gHandlerCount; ++i) {
-        if (gRequestHandlers[i].type == type)
-            return IO_ERR_DUPLICIT_HANDLER;
+    WaitSema(gProcSemaId);
+
+    if (handler == NULL) {
+        result = IO_ERR_INVALID_HANDLER;
+    } else if (gHandlerCount >= MAX_IO_HANDLERS) {
+        result = IO_ERR_TOO_MANY_HANDLERS;
+    } else {
+        for (i = 0; i < gHandlerCount; ++i) {
+            if (gRequestHandlers[i].type == type) {
+                result = IO_ERR_DUPLICIT_HANDLER;
+                break;
+            }
+        }
     }
 
-    gRequestHandlers[gHandlerCount].type = type;
-    gRequestHandlers[gHandlerCount].handler = handler;
-    gHandlerCount++;
+    if (result == IO_OK) {
+        gRequestHandlers[gHandlerCount].type = type;
+        gRequestHandlers[gHandlerCount].handler = handler;
+        gHandlerCount++;
+    }
 
     SignalSema(gProcSemaId);
 
-    return IO_OK;
+    return result;
 }
 
 static io_request_handler_t ioGetHandler(int type)
@@ -226,28 +231,33 @@ int ioPutRequest(int type, void *data)
 
     // We don't have to lock the tip of the queue...
     // If it exists, it won't be touched, if it does not exist, it is not being processed
-    struct io_request_t *req = gReqEnd;
+    struct io_request_t *req =
+    (struct io_request_t *)malloc(sizeof(struct io_request_t));
 
-    if (!req) {
-        gReqList = (struct io_request_t *)malloc(sizeof(struct io_request_t));
-        req = gReqList;
-        gReqEnd = gReqList;
-    } else {
-        req->next = (struct io_request_t *)malloc(sizeof(struct io_request_t));
-        req = req->next;
-        gReqEnd = req;
-    }
-
-    req->next = NULL;
-    req->type = type;
-    req->data = data;
-
+if (req == NULL) {
     SignalSema(gEndSemaId);
-
-    // Worker thread cannot wake itself up (WakeupThread will return an error), but it will find the new request before sleeping.
-    WakeupThread(gIOThreadId);
-    return IO_OK;
+    return IO_ERR_OUT_OF_MEMORY;
 }
+
+req->next = NULL;
+req->type = type;
+req->data = data;
+
+if (gReqEnd == NULL) {
+    gReqList = req;
+    gReqEnd = req;
+} else {
+    gReqEnd->next = req;
+    gReqEnd = req;
+}
+
+SignalSema(gEndSemaId);
+
+// Worker thread cannot wake itself up (WakeupThread will return an error), but it will find the new request before sleeping.
+WakeupThread(gIOThreadId);
+return IO_OK;
+}
+
 
 int ioRemoveRequests(int type)
 {
